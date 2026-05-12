@@ -1,0 +1,44 @@
+services:
+  db:
+    image: postgis/postgis:16-3.4 # PostgreSQL 16 + PostGIS 3.4
+    environment:
+      POSTGRES_DB: WarehouseCV
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: 64923
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    ports:
+      - "5432:5432" # optional, for local inspection
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "postgres", "-d", "WarehouseCV"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "5041:5041"
+    environment:
+      - ConnectionStrings__DefaultConnection=Host=db;Port=5432;Database=WarehouseCV;Username=postgres;Password=64923;Include Error Detail=true
+
+      - Jwt__Key=SuperSecretKeyThatIsAtLeast32Characters
+      - Jwt__Issuer=WarehouseCV
+      - Jwt__Audience=WarehouseCV
+
+      - PythonSettings__PythonDllPath=/usr/local/lib/libpython3.11.so.1.0
+      - ASPNETCORE_URLS=http://+:5041
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: unless-stopped
+    volumes:
+      # Mount the images folder so uploaded images survive container restarts
+      - images_data:/app/wwwroot/images
+
+volumes:
+  pgdata:
+  images_data:
