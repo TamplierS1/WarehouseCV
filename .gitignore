@@ -1,3 +1,22 @@
-WarehouseCV/bin
-WarehouseCV/obj
-.vs
+# .NET
+bin/
+obj/
+*.user
+*.suo
+.vs/
+
+# Node / Vue
+node_modules/
+dist/
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# Docker
+.env
+
+# Misc
+*.log
