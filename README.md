@@ -1,66 +1,348 @@
-﻿# WarehouseCV – Computer Vision Warehouse Management
+﻿# WarehouseCV – API для складского учёта с компьютерным зрением
 
-WarehouseCV is a full‑stack web application for warehouse inventory tracking enhanced with computer vision. Users can manage products, create inventory sessions, and upload images of warehouse zones; a Python‑based AI model automatically counts products in the images and records the results as geotagged reports.
+WarehouseCV представляет собой серверное веб-приложение, предоставляющее REST API для учёта товаров на складе 
+с автоматическим подсчётом единиц продукции по фотографиям.  
+Пользователи могут создавать и просматривать товары, формировать инвентаризационные сессии, 
+загружать снимки товаров и получать отчёты с количеством обнаруженных объектов.  
+Система поддерживает многопользовательскую работу, аутентификацию по JWT, 
+экспорт данных в Excel и хранение географических координат каждой точки учёта.
 
-The app supports multiple users with JWT authentication, exports data to Excel, and runs entirely in Docker.
+Изображения должны иметь только одинаковые товары! Товары также должны занимать большую часть изображения.
+В ином случае модель не сможет их распознать.
 
-## Features
+## Основные возможности
 
-    User authentication – register & login with JWT tokens
+- Регистрация и вход пользователей с выдачей JWT-токенов.
+- Управление справочником товаров (создание, редактирование, удаление, массовый импорт/экспорт из Excel).
+- Ведение инвентаризаций – группировка отчётов по отдельным сессиям.
+- Обработка изображений с помощью нейросетевой модели (YOLO) для подсчёта количества товара.
+- Сохранение географических координат каждого отчёта (PostGIS).
+- Экспорт сводки по инвентаризации: для каждого товара выводится общее число зафиксированных единиц.
+- Полная контейнеризация (Docker Compose) с PostgreSQL + PostGIS и Python-окружением.
 
-    Product management – CRUD, bulk Excel import/export
+## Технологический стек
 
-    Inventory sessions – group reports by inventory runs
+| Компонент          | Технология                                       |
+|--------------------|--------------------------------------------------|
+| Серверное ядро     | ASP.NET Core Web API (.NET 10)                    |
+| ORM                | Entity Framework Core (Npgsql)                   |
+| База данных        | PostgreSQL 16 + PostGIS 3.4                      |
+| Компьютерное зрение| Python 3.13, Ultralytics YOLO, OpenCV, PyTorch   |
+| Аутентификация     | JWT Bearer Token                                 |
+| Генерация Excel    | ClosedXML                                        |
+| Контейнеризация    | Docker, Docker Compose                           |
 
-    Computer vision – automatic product counting from uploaded photos (YOLO + custom pipeline)
+## Аутентификация
 
-    Geospatial data – each report is pinned on a map (PostGIS geography column)
+Все эндпоинты, кроме регистрации и входа, требуют передачи заголовка `Authorization: Bearer <token>`.  
+Токен получается после успешного входа. Срок действия токена – 1 час.
 
-    Excel export – download aggregated product summary per inventory
+## API – подробное описание
 
-    Dockerised – ready‑to‑run with PostgreSQL/PostGIS and Python
+### Учётные записи
 
-## Authentication
+#### Регистрация нового пользователя
 
-All endpoints except POST /api/accounts/login and POST /api/accounts/register require an Authorization: Bearer <token> header.
-The token is obtained after login and stored in the browser’s localStorage.
+POST /api/accounts/register  
 
-## Computer Vision Pipeline
+Входные данные (JSON):
+```json
+{
+  "email": "user@example.com",
+  "password": "SecurePa$$word"
+}
+```
 
-    User uploads a photo of a warehouse zone.
+Успешный ответ (200 OK):
+```json
+{
+  "token": "eyJhbGciOiJIUzI1NiIs..."
+}
+```
 
-    The backend saves the image, then calls Scripts/pipe_counting.py.
+Создаётся новый пользователь с указанным email. Возвращается JWT-токен, готовый для использования.
 
-    The Python script runs a YOLO model (final_weights.pt) to detect products.
+#### Вход в систему
 
-    The count is returned and saved in the report’s ProductCount.
+POST /api/accounts/login
 
-    The processed image is saved back (with bounding boxes, if configured).
+Входные данные (JSON):  
+Аналогично регистрации – email и password.
 
-## Docker Details
+Успешный ответ (200 OK):
+```json
+{
+  "token": "eyJhbGciOiJIUzI1NiIs..."
+}
+```
 
-The Dockerfile uses a multi‑stage build:
+Ошибки:
+- 404 – пользователь с таким email не найден.
+- 401 – неверный пароль.
 
-    Build stage – compiles the .NET project.
+Никаких изменений в базе данных не производится.
 
-    Runtime stage – based on ultralytics/ultralytics:latest-cpu, adds the .NET runtime, your custom Python packages, the EF migration tool, and the entrypoint script.
+### Товары
 
-docker-compose.yml defines two services:
+#### Получить список всех товаров
 
-    db – PostgreSQL 16 + PostGIS
+GET /api/products
 
-    backend – the ASP.NET app (auto‑runs EF migrations on startup)
+Ответ (200 OK):
+Массив объектов Product:
+```json
+[
+  {
+    "id": 1,
+    "mark": "Марка",
+    "name": "Наименование",
+    "designation": "Обозначение",
+    "classifier": "Классификатор",
+    "classifierGroup": "Группа классификатора"
+  }
+]
+```
 
-Environment variables in the compose file override appsettings.json for database host, JWT keys, etc.
+#### Получить товар по ID
 
-## Excel Features
+GET /api/products/{id}
 
-Upload an Excel file with columns Mark, Name, Designation, Classifier, ClassifierGroup to mass‑import products.
-Download the full product list as an Excel file.
-Inside each inventory, export an aggregated summary showing how many of each product were detected across all reports.
+Ответ (200 OK): объект Product.  
+Ошибка: 404 – товар не найден.
 
-## Users & Security
+#### Создать товар
 
-Every inventory, report, and product is scoped to the authenticated user (except products, which are shared).
-Users can only view/modify their own inventories and reports.
-JWT tokens expire after 1 hour.
+POST /api/products
+
+Входные данные (JSON):
+```json
+{
+  "mark": "Марка",
+  "name": "Наименование",
+  "designation": "Обозначение",
+  "classifier": "Классификатор",
+  "classifierGroup": "Группа классификатора"
+}
+```
+
+Успешный ответ (200 OK):
+```json
+{
+  "productId": 1
+}
+```
+
+Запись добавляется в таблицу товаров.
+
+#### Обновить товар
+
+PUT /api/products/{id}
+
+Входные данные (JSON):  
+Та же структура, что и при создании (все поля обязательны).
+
+Успешный ответ: 204 No Content.
+
+Обновляются все поля существующего товара с указанным ID.
+
+#### Удалить товар
+
+DELETE /api/products/{id}
+
+Успешный ответ: 204 No Content.
+
+Ошибка: 404 – товар не найден.
+
+Товар удаляется из базы данных. Связанные отчёты не удаляются – рекомендуется предварительно удалить отчёты, ссылающиеся на этот товар.
+
+#### Импорт товаров из Excel
+
+POST /api/products/upload
+
+Входные данные: multipart/form-data с файлом .xlsx в поле file.
+Файл должен содержать обязательные колонки: Mark, Name, Designation, Classifier, ClassifierGroup (на первой строке заголовки).
+
+Успешный ответ: 200 OK.
+
+Все строки из файла добавляются как новые записи в таблицу товаров. Повторяющиеся записи не проверяются.
+
+#### Экспорт товаров в Excel
+
+GET /api/products/download
+
+Ответ: файл products.xlsx (application/vnd.openxmlformats-officedocument.spreadsheetml.sheet).
+
+### Инвентаризации
+
+#### Получить список инвентаризаций текущего пользователя
+
+GET /api/inventories
+
+Ответ (200 OK): массив объектов:
+```json
+[
+  {
+    "id": 1,
+    "date": "2026-05-12T10:00:00",
+    "userId": "..."
+  }
+]
+```
+
+#### Создать новую инвентаризацию
+
+POST /api/inventories
+
+Успешный ответ (200 OK):
+```json
+{
+  "inventoryId": 2
+}
+```
+
+Создаётся новая запись инвентаризации с текущей датой/временем UTC, привязанная к аутентифицированному пользователю.
+
+#### Удалить инвентаризацию
+
+DELETE /api/inventories/{id}
+
+Успешный ответ: 204 No Content.
+
+Ошибки:
+- 404 – инвентаризация не найдена.
+- 401 – инвентаризация принадлежит другому пользователю.
+
+Удаляются все отчёты, связанные с этой инвентаризацией, а также их изображения (файлы из папки wwwroot/images и записи в БД). Затем удаляется сама инвентаризация.
+
+#### Экспорт сводки по инвентаризации
+
+GET /api/inventories/download/{id}
+
+Ответ: файл Excel с именем id{inventoryId}_{дата}.xlsx.
+Внутри файла – сводка по каждому товару, встречающемуся в отчётах данной инвентаризации. Столбцы: ProductId, Mark, Name, Designation, Classifier, ClassifierGroup, TotalDetected (общее количество), ReportCount (число отчётов).
+
+Ошибки:
+- 404 – инвентаризация не найдена.
+- 401 – принадлежит другому пользователю.
+
+### Отчёты
+
+#### Получить отчёт по ID
+
+GET /api/reports/{id}
+
+Ответ (200 OK): объект GetReportDTO
+```json
+{
+    "id": 10,
+    "longitude": "37.6173",
+    "latitude": "55.7558",
+    "date": "2026-05-12T12:00:00",
+    "warehouseZone": "A-12",
+    "productCount": 5,
+    "productId": 1,
+    "imageFilename": "abc123.jpg",
+    "imageBase64": "data:image/jpeg;base64,...",
+    "userEmail": "user@example.com",
+    "inventoryId": 1
+}
+```
+
+Ошибки:
+- 404 – не найден.
+- 401 – принадлежит другому пользователю.
+
+#### Получить список отчётов (с фильтром по инвентаризации)
+
+GET /api/reports/inventory/{id}
+
+Ответ (200 OK): массив объектов GetReportDTO
+
+#### Получить список всех отчетов
+
+GET /api/reports
+
+Ответ (200 OK): массив объектов GetReportDTO
+
+#### Создать новый отчёт
+
+POST /api/reports
+
+Входные данные (JSON):
+```json
+{
+  "longitude": "37.6173",
+  "latitude": "55.7558",
+  "warehouseZone": "A-12",
+  "productId": 1,
+  "imageFilename": "photo.jpg",
+  "imageBase64": "data:image/jpeg;base64,...",
+  "inventoryId": 1
+}
+```
+imageBase64 должен содержать Data URL (префикс data:image/...;base64, и закодированные данные).
+Координаты передаются в десятичных градусах.
+
+Успешный ответ (200 OK):
+```json
+{
+  "reportId": 15
+}
+```
+
+Изображение сохраняется в папку wwwroot/images с уникальным именем.
+Вызывается Python-скрипт pipe_counting.py, который анализирует изображение и возвращает обработанный кадр и количество обнаруженных объектов.
+Обработанное изображение замещает исходное.
+Создаётся запись Report с координатами (сохраняются как geography(point, 4326)), временем UTC, номером зоны,
+количеством, ссылками на товар, изображение, номерами пользователя и инвентаризацию.
+Запись изображения также сохраняется в БД.
+
+Ошибки:
+- 404 – инвентаризация не найдена или товар не найден.
+- 401 – инвентаризация принадлежит другому пользователю.
+- 500 – ошибка выполнения Python-скрипта.
+
+#### Удалить отчёт
+
+DELETE /api/reports/{id}
+
+Успешный ответ: 204 No Content.
+
+Ошибки:
+- 404 – не найден.
+- 401 – принадлежит другому пользователю.
+
+Удаляется файл изображения с диска и связанные записи Image и Report из базы данных.
+
+## Запуск с помощью Docker
+
+Предварительные требования: Docker и Docker Compose.
+
+Убедитесь, что в директории WarehouseCV/wwwroot/images/ существует папка (создайте пустую, если отсутствует).
+
+Выполните сборку и запуск:
+
+    docker-compose up --build -d
+
+При первом запуске автоматически применятся миграции базы данных.
+API будет доступно по адресу http://localhost:5041.
+
+Сервисы:
+- db – PostgreSQL 16 + PostGIS, порт 5432 (пробрасывается на хост для отладки).
+- backend – приложение ASP.NET Core (порт 5041).
+
+Конфигурация (строка подключения, ключи JWT) задаётся через переменные окружения в docker-compose.yml.
+
+## Локальная разработка
+
+- Установите .NET SDK 10.0.
+- Установите PostgreSQL 16 и активируйте расширение PostGIS.
+- Установите Python 3.13 и зависимости из requirements.txt.
+- Настройте appsettings.json под локальное окружение (строка подключения, путь к Python DLL, секретный ключ JWT).
+- Примените миграции:
+
+      dotnet ef database update
+
+- Запустите приложение:
+
+      dotnet run
